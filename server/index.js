@@ -66,6 +66,8 @@ Follow the formatting of this specific example structure:
 \\documentclass[11pt,a4paper,sans]{moderncv}
 \\moderncvstyle{classic}
 \\moderncvicons{letters}
+\\usepackage[T1]{fontenc} % Robust font encoding
+\\usepackage{lmodern}     % Scalable fonts to prevent font expansion errors
 % Remove symbols
 \\def\\mobilesymbol{}
 \\def\\phonesymbol{}
