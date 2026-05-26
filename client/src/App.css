@@ -209,6 +209,82 @@ button:disabled {
   color: #646cff;
 }
 
+.toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 1rem 2rem;
+  border-radius: 8px;
+  color: white;
+  z-index: 1000;
+  animation: slideIn 0.3s ease-out;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+.toast.success {
+  background-color: #2e7d32;
+}
+
+.toast.error {
+  background-color: #c62828;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.progress-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+  backdrop-filter: blur(4px);
+}
+
+.progress-container {
+  width: 90%;
+  max-width: 500px;
+  background: #242424;
+  padding: 2.5rem;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  text-align: center;
+}
+
+.progress-bar-wrapper {
+  width: 100%;
+  height: 12px;
+  background: #1a1a1a;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+  border: 1px solid #333;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #646cff, #9c64ff);
+  transition: width 0.4s ease-in-out;
+  box-shadow: 0 0 10px rgba(100, 108, 255, 0.5);
+}
+
+.progress-status {
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: #646cff;
+  margin: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  letter-spacing: 0.5px;
+}
+
 @media (max-width: 800px) {
   .form-grid, .resume-layout {
     grid-template-columns: 1fr;

@@ -15,76 +15,103 @@ const port = 3001;
 app.use(cors());
 app.use(bodyParser.json());
 
+const escapeLatex = (str) => {
+    if (!str || typeof str !== 'string') return str;
+    return str
+        .replace(/\\/g, '\\textbackslash{}')
+        .replace(/([&%$#_{}])/g, '\\$1')
+        .replace(/~/g, '\\textasciitilde{}')
+        .replace(/\^/g, '\\textasciicircum{}');
+};
+
 const OUTPUT_DIR = path.join(__dirname, 'outputs');
-if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR);
-}
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR);
 
 const CANDIDATE_DIR = path.join(__dirname, 'candidate_data');
-if (!fs.existsSync(CANDIDATE_DIR)) {
-    fs.mkdirSync(CANDIDATE_DIR);
-}
+if (!fs.existsSync(CANDIDATE_DIR)) fs.mkdirSync(CANDIDATE_DIR);
 
 const OVERVIEW_JSON = path.join(CANDIDATE_DIR, 'candidate_overview.json');
 
-// Default structure with arrays for experience and education
-const defaultData = {
-    firstName: '',
-    lastName: '',
-    city: '',
-    state: '',
-    phone: '',
-    email: '',
-    linkedin: '',
-    github: '',
-    portfolio: '',
-    skills: '',
-    experience: [],
-    education: []
+let candidateData = {
+    firstName: '', lastName: '', city: '', state: '', phone: '', email: '',
+    linkedin: '', github: '', portfolio: '', skills: '', experience: [], education: []
 };
 
-let candidateData = { ...defaultData };
-
 if (fs.existsSync(OVERVIEW_JSON)) {
-    try {
-        candidateData = JSON.parse(fs.readFileSync(OVERVIEW_JSON, 'utf8'));
-    } catch (e) {
-        console.error('Failed to parse candidate JSON, using defaults');
-    }
+    candidateData = JSON.parse(fs.readFileSync(OVERVIEW_JSON, 'utf8'));
 }
 
-app.get('/api/overview', (req, res) => {
-    res.json(candidateData);
-});
+app.get('/api/overview', (req, res) => res.json(candidateData));
 
 app.post('/api/overview', (req, res) => {
     candidateData = { ...candidateData, ...req.body };
     fs.writeFileSync(OVERVIEW_JSON, JSON.stringify(candidateData, null, 2));
-    res.json({ message: 'Overview updated and saved' });
+    res.json({ message: 'Overview updated' });
 });
 
 app.post('/api/generate-resume', async (req, res) => {
     const { jobDescription, alterations } = req.body;
 
-    if (!candidateData.firstName || !candidateData.lastName) {
-        return res.status(400).json({ error: 'Candidate profile is incomplete. Name is required.' });
-    }
+    // --- STEP 1: THE ARCHITECT (Content Planning) ---
+    const architectPrompt = `
+You are a Resume Architect. Analyze the Candidate JSON and Job Description.
+Create a structured Content Plan for a 1-page professional resume.
 
-    // Extract job title from the first line or first 50 characters of the description
-    const firstLine = jobDescription.split('\n')[0].trim() || 'Job';
-    const extractedTitle = firstLine.length > 50 ? firstLine.substring(0, 50) : firstLine;
-    const sanitizedTitle = extractedTitle.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_');
-    
-    const lastName = candidateData.lastName.replace(/[^a-z0-9]/gi, '');
-    const fileNameBase = `${lastName}_${sanitizedTitle}_Resume`;
+MANDATES:
+- Include at least 4-5 work experience entries.
+- If IT role: Prioritize Help Desk/Technician roles at the top.
+- Select 10-12 most relevant technical skills.
+- Draft a high-impact professional summary.
 
-    const prompt = `
-You are an expert resume writer. Create a professional 1-page software engineering or IT resume using the LaTeX 'moderncv' class.
-Style: classic
-Icons: letters
-Margins: scale=0.88, hintscolumnwidth=3.8cm
+RETURN ONLY A JSON OBJECT:
+{
+  "jobTitleForFilename": "ExtractedJobTitle",
+  "isSWE": true/false,
+  "summary": "...",
+  "skills": [{"category": "...", "items": "..."}],
+  "experience": [{"dates": "...", "title": "...", "company": "...", "location": "...", "bullets": ["...", "..."]}],
+  "education": [{"dates": "...", "degree": "...", "school": "...", "location": "...", "details": "..."}]
+}
 
-LATEX TEMPLATE:
+CANDIDATE DATA:
+${JSON.stringify(candidateData, null, 2)}
+
+JOB DESCRIPTION:
+${jobDescription}
+`;
+
+    try {
+        console.log(`[Architect] Starting content plan...`);
+        const architectRes = await axios.post('http://localhost:11434/api/generate', {
+            model: 'llama3',
+            prompt: architectPrompt,
+            stream: false,
+            format: 'json'
+        });
+
+        let plan;
+        try {
+            plan = JSON.parse(architectRes.data.response);
+        } catch (e) {
+            console.error('Raw Architect Response:', architectRes.data.response);
+            throw new Error('Failed to parse Architect JSON');
+        }
+
+        const rawTitle = plan.jobTitleForFilename || plan.jobTitle || 'JobPosition';
+        const jobTitleSlug = rawTitle.replace(/[^a-z0-9]/gi, '');
+        const fileNameBase = `${candidateData.lastName}${jobTitleSlug}`;
+
+        // --- STEP 2: THE TYPESETTER (LaTeX Generation) ---
+        console.log(`[Typesetter] Generating LaTeX...`);
+        const typesetterPrompt = `
+You are a LaTeX Expert. Map this plan to 'moderncv' (classic/letters).
+
+RULES:
+1. NO PHOTOS: Do NOT use \\photo.
+2. NO EXTRA PACKAGES: Use only what is in the preamble.
+3. RETURN ONLY LaTeX starting with \\documentclass and ending with \\end{document}.
+
+PREAMBLE:
 \\documentclass[11pt,a4paper,sans]{moderncv}
 \\moderncvstyle{classic}
 \\moderncvicons{letters}
@@ -98,72 +125,35 @@ LATEX TEMPLATE:
 \\usepackage[scale=0.88]{geometry}
 \\setlength{\\hintscolumnwidth}{3.8cm}
 
-\\name{${candidateData.firstName}}{${candidateData.lastName}}
-\\address{${candidateData.city}}{${candidateData.state}}{}
-\\phone{${candidateData.phone}}
-\\email{${candidateData.email}}
-${candidateData.linkedin ? `\\social[linkedin]{${candidateData.linkedin}}` : ''}
-${candidateData.github ? `\\social[github]{${candidateData.github}}` : ''}
-${candidateData.portfolio ? `\\homepage{${candidateData.portfolio}}` : ''}
-
-\\begin{document}
-\\makecvtitle
-
-\\section{Summary}
-[Draft a concise, high-impact summary tailored to the job description]
-
-\\section{Core Competencies}
-% TARGETED SELECTION: Draw a handful of the most relevant technical skills from the candidate data below that best fit the job description.
-\\cvitem{Category}{Skill 1, Skill 2, ...}
-
-\\section{Relevant Experience}
-% Use \\cventry{dates}{title}{company}{location}{}{description} for each job below.
-% For the description part, use an itemize block. 
-% Tailor the bullet points to emphasize achievements relevant to the job description.
-
-\\section{Education}
-% Use \\cventry{dates}{degree}{school}{location}{}{details} for each entry below.
-
-\\end{document}
-
-Return ONLY the complete, compilable LaTeX document.
-
-CANDIDATE DATA:
-Skills: ${candidateData.skills}
-
-EXPERIENCE ENTRIES:
-${candidateData.experience.map(job => `
-- Dates: ${job.dates}
-  Title: ${job.title}
-  Company: ${job.company}
-  Location: ${job.location}
-  Description: ${job.description}
-`).join('\n')}
-
-EDUCATION ENTRIES:
-${candidateData.education.map(edu => `
-- Dates: ${edu.dates}
-  Degree: ${edu.degree}
-  School: ${edu.school}
-  Location: ${edu.location}
-  Details: ${edu.details}
-`).join('\n')}
-
-JOB DESCRIPTION:
-${jobDescription}
-
-${alterations ? `USER REQUESTED ALTERATIONS: ${alterations}` : ''}
+CONTENT:
+Name: ${escapeLatex(candidateData.firstName)} ${escapeLatex(candidateData.lastName)}
+Location: ${escapeLatex(candidateData.city)}, ${escapeLatex(candidateData.state)}
+Phone: ${escapeLatex(candidateData.phone)}
+Email: ${escapeLatex(candidateData.email)}
+LinkedIn: ${escapeLatex(candidateData.linkedin)}
+GitHub: ${plan.isSWE ? escapeLatex(candidateData.github) : ''}
+Portfolio: ${plan.isSWE ? escapeLatex(candidateData.portfolio) : ''}
+Summary: ${escapeLatex(plan.summary)}
+Skills: ${JSON.stringify(plan.skills)}
+Experience: ${JSON.stringify(plan.experience)}
+Education: ${JSON.stringify(plan.education)}
 `;
 
-    try {
-        let response = await axios.post('http://localhost:11434/api/generate', {
+        const typesetterRes = await axios.post('http://localhost:11434/api/generate', {
             model: 'deepseek-coder-v2',
-            prompt: prompt,
+            prompt: typesetterPrompt,
             stream: false
         });
 
-        let latexCode = response.data.response;
-        latexCode = latexCode.replace(/```latex/g, '').replace(/```/g, '').trim();
+        let rawLatex = typesetterRes.data.response;
+        const docMatch = rawLatex.match(/\\documentclass[\s\S]*\\end\{document\}/);
+        let latexCode = docMatch ? docMatch[0] : rawLatex;
+
+        // Force cleanup
+        latexCode = latexCode
+            .replace(/\\photo\[.*?\]\{.*?\}/g, '')
+            .replace(/\\usepackage\{picture\}/g, '')
+            .trim();
 
         const latexPath = path.join(OUTPUT_DIR, `${fileNameBase}.tex`);
         const pdfPath = path.join(OUTPUT_DIR, `${fileNameBase}.pdf`);
@@ -175,7 +165,6 @@ ${alterations ? `USER REQUESTED ALTERATIONS: ${alterations}` : ''}
                 const output = fs.createWriteStream(pdfPath);
                 const pdfGenerator = latex(input);
                 pdfGenerator.pipe(output);
-                
                 pdfGenerator.on('error', err => reject(err));
                 pdfGenerator.on('finish', () => resolve());
             });
@@ -183,22 +172,15 @@ ${alterations ? `USER REQUESTED ALTERATIONS: ${alterations}` : ''}
 
         try {
             await compileLatex(latexCode);
-        } catch (initialError) {
-            console.warn('Initial LaTeX compilation failed, attempting self-fix...', initialError.message);
-            const fixPrompt = `
-The following LaTeX code failed to compile with error: "${initialError.message}". 
-Fix the syntax and return ONLY the corrected LaTeX document. 
-Ensure special characters like & are escaped (\\&).
-
-ORIGINAL CODE:
-${latexCode}
-`;
-            const fixResponse = await axios.post('http://localhost:11434/api/generate', {
+        } catch (err) {
+            console.warn('Retry fix...', err.message);
+            const fixRes = await axios.post('http://localhost:11434/api/generate', {
                 model: 'deepseek-coder-v2',
-                prompt: fixPrompt,
+                prompt: `Fix this LaTeX (error: ${err.message}):\n${latexCode}\nReturn fixed code ONLY. No photos.`,
                 stream: false
             });
-            latexCode = fixResponse.data.response.replace(/```latex/g, '').replace(/```/g, '').trim();
+            latexCode = fixRes.data.response.match(/\\documentclass[\s\S]*\\end\{document\}/)[0];
+            latexCode = latexCode.replace(/\\photo\[.*?\]\{.*?\}/g, '');
             await compileLatex(latexCode);
         }
 
@@ -208,22 +190,18 @@ ${latexCode}
         });
 
     } catch (error) {
-        console.error('Final Error:', error);
-        res.status(500).json({ error: 'Failed to generate a valid resume.', details: error.message });
+        console.error('Error:', error);
+        res.status(500).json({ error: 'Generation failed', details: error.message });
     }
 });
 
 app.get('/api/download-resume', (req, res) => {
-    const fileName = req.query.file || 'resume';
-    const pdfPath = path.join(OUTPUT_DIR, `${fileName}.pdf`);
+    const pdfPath = path.join(OUTPUT_DIR, `${req.query.file}.pdf`);
     if (fs.existsSync(pdfPath)) {
-        res.contentType("application/pdf");
-        fs.createReadStream(pdfPath).pipe(res);
+        res.contentType("application/pdf").pipe(fs.createReadStream(pdfPath));
     } else {
-        res.status(404).json({ error: 'PDF not found' });
+        res.status(404).send('Not found');
     }
 });
 
-app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
-});
+app.listen(port, () => console.log(`Server: http://localhost:${port}`));

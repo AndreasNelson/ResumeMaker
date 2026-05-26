@@ -56,7 +56,9 @@ function App() {
   const [latex, setLatex] = useState('')
   const [pdfUrl, setPdfUrl] = useState('')
   const [loading, setLoading] = useState(false)
+  const [progress, setProgress] = useState({ percent: 0, status: '' })
   const [step, setStep] = useState(1) // 1: Profile, 2: Job Details, 3: View/Alter
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null)
 
   useEffect(() => {
     axios.get('http://localhost:3001/api/overview')
@@ -66,12 +68,17 @@ function App() {
       .catch(err => console.error('Failed to load profile', err))
   }, [])
 
-  const saveProfile = async () => {
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  }
+
+  const saveProfile = async (silent = false) => {
     try {
       await axios.post('http://localhost:3001/api/overview', candidate)
-      alert('Profile saved successfully!')
+      if (!silent) showToast('Profile saved successfully!')
     } catch (err) {
-      alert('Failed to save profile')
+      showToast('Failed to save profile', 'error')
     }
   }
 
@@ -122,30 +129,54 @@ function App() {
   }
 
   const nextStep = async () => {
-    await saveProfile();
+    await saveProfile(true);
     setStep(2);
   }
 
   const generateResume = async (alterations?: string) => {
     setLoading(true)
+    setProgress({ percent: 10, status: 'Initializing Architecture...' })
+    
     try {
+      // Step 1: Planning
+      setProgress({ percent: 30, status: 'Llama 3: Designing Content Plan...' })
       const res = await axios.post('http://localhost:3001/api/generate-resume', { 
         jobDescription, 
         alterations 
       })
+      
+      setProgress({ percent: 100, status: 'Generation Complete!' })
       setLatex(res.data.latex)
       setPdfUrl(`${res.data.pdfUrl}&t=${new Date().getTime()}`)
       setStep(3)
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to generate resume')
+      showToast(err.response?.data?.error || 'Failed to generate resume', 'error')
     } finally {
       setLoading(false)
+      setTimeout(() => setProgress({ percent: 0, status: '' }), 1000)
     }
   }
 
   return (
     <div className="container">
+      {toast && (
+        <div className={`toast ${toast.type}`}>
+          {toast.message}
+        </div>
+      )}
+      
       <h1>Resume Maker AI</h1>
+      
+      {loading && (
+        <div className="progress-overlay">
+          <div className="progress-container">
+            <div className="progress-bar-wrapper">
+              <div className="progress-bar-fill" style={{ width: `${progress.percent}%` }}></div>
+            </div>
+            <p className="progress-status">{progress.status}</p>
+          </div>
+        </div>
+      )}
       
       {step === 1 && (
         <div className="card">
