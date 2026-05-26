@@ -25,36 +25,58 @@ if (!fs.existsSync(CANDIDATE_DIR)) {
     fs.mkdirSync(CANDIDATE_DIR);
 }
 
-const OVERVIEW_FILE = path.join(CANDIDATE_DIR, 'candidate_overview.txt');
+const OVERVIEW_JSON = path.join(CANDIDATE_DIR, 'candidate_overview.json');
 
-// Load overview on startup
-let candidateOverview = '';
-if (fs.existsSync(OVERVIEW_FILE)) {
-    candidateOverview = fs.readFileSync(OVERVIEW_FILE, 'utf8');
+// Default structure with arrays for experience and education
+const defaultData = {
+    firstName: '',
+    lastName: '',
+    city: '',
+    state: '',
+    phone: '',
+    email: '',
+    linkedin: '',
+    github: '',
+    portfolio: '',
+    skills: '',
+    experience: [],
+    education: []
+};
+
+let candidateData = { ...defaultData };
+
+if (fs.existsSync(OVERVIEW_JSON)) {
+    try {
+        candidateData = JSON.parse(fs.readFileSync(OVERVIEW_JSON, 'utf8'));
+    } catch (e) {
+        console.error('Failed to parse candidate JSON, using defaults');
+    }
 }
 
 app.get('/api/overview', (req, res) => {
-    res.json({ overview: candidateOverview });
+    res.json(candidateData);
 });
 
 app.post('/api/overview', (req, res) => {
-    candidateOverview = req.body.overview;
-    fs.writeFileSync(OVERVIEW_FILE, candidateOverview);
+    candidateData = { ...candidateData, ...req.body };
+    fs.writeFileSync(OVERVIEW_JSON, JSON.stringify(candidateData, null, 2));
     res.json({ message: 'Overview updated and saved' });
 });
 
 app.post('/api/generate-resume', async (req, res) => {
-    const { jobDescription, alterations, companyName } = req.body;
+    const { jobDescription, alterations } = req.body;
 
-    if (!candidateOverview) {
-        return res.status(400).json({ error: 'Candidate overview is missing.' });
+    if (!candidateData.firstName || !candidateData.lastName) {
+        return res.status(400).json({ error: 'Candidate profile is incomplete. Name is required.' });
     }
 
-    // Attempt to extract candidate name for file naming (fallback to "Candidate")
-    const nameMatch = candidateOverview.match(/(?:Name|I am|This is)\s*[:\-]?\s*([A-Z][a-z]+\s+[A-Z][a-z]+)/i);
-    const lastName = nameMatch ? nameMatch[1].split(' ').pop() : 'Candidate';
-    const sanitizedCompany = (companyName || 'Company').replace(/[^a-z0-9]/gi, '_');
-    const fileNameBase = `${lastName}_${sanitizedCompany}_Resume`;
+    // Extract job title from the first line or first 50 characters of the description
+    const firstLine = jobDescription.split('\n')[0].trim() || 'Job';
+    const extractedTitle = firstLine.length > 50 ? firstLine.substring(0, 50) : firstLine;
+    const sanitizedTitle = extractedTitle.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_');
+    
+    const lastName = candidateData.lastName.replace(/[^a-z0-9]/gi, '');
+    const fileNameBase = `${lastName}_${sanitizedTitle}_Resume`;
 
     const prompt = `
 You are an expert resume writer. Create a professional 1-page software engineering or IT resume using the LaTeX 'moderncv' class.
@@ -62,13 +84,12 @@ Style: classic
 Icons: letters
 Margins: scale=0.88, hintscolumnwidth=3.8cm
 
-Follow the formatting of this specific example structure:
+LATEX TEMPLATE:
 \\documentclass[11pt,a4paper,sans]{moderncv}
 \\moderncvstyle{classic}
 \\moderncvicons{letters}
-\\usepackage[T1]{fontenc} % Robust font encoding
-\\usepackage{lmodern}     % Scalable fonts to prevent font expansion errors
-% Remove symbols
+\\usepackage[T1]{fontenc}
+\\usepackage{lmodern}
 \\def\\mobilesymbol{}
 \\def\\phonesymbol{}
 \\def\\fixedphonesymbol{}
@@ -77,35 +98,56 @@ Follow the formatting of this specific example structure:
 \\usepackage[scale=0.88]{geometry}
 \\setlength{\\hintscolumnwidth}{3.8cm}
 
-\\name{FirstName}{LastName}
-\\address{City, State}{}{}
-\\phone{...}
-\\email{...}
-\\social[linkedin]{...}
+\\name{${candidateData.firstName}}{${candidateData.lastName}}
+\\address{${candidateData.city}}{${candidateData.state}}{}
+\\phone{${candidateData.phone}}
+\\email{${candidateData.email}}
+${candidateData.linkedin ? `\\social[linkedin]{${candidateData.linkedin}}` : ''}
+${candidateData.github ? `\\social[github]{${candidateData.github}}` : ''}
+${candidateData.portfolio ? `\\homepage{${candidateData.portfolio}}` : ''}
 
 \\begin{document}
 \\makecvtitle
 
 \\section{Summary}
-[Impactful summary]
+[Draft a concise, high-impact summary tailored to the job description]
 
 \\section{Core Competencies}
+% TARGETED SELECTION: Draw a handful of the most relevant technical skills from the candidate data below that best fit the job description.
 \\cvitem{Category}{Skill 1, Skill 2, ...}
 
 \\section{Relevant Experience}
-\\cventry{Dates}{Job Title}{Company}{Location}{}{%
-\\begin{itemize}
-    \\item Achievement...
-\\end{itemize}}
+% Use \\cventry{dates}{title}{company}{location}{}{description} for each job below.
+% For the description part, use an itemize block. 
+% Tailor the bullet points to emphasize achievements relevant to the job description.
 
 \\section{Education}
-\\cventry{Date}{Degree}{University}{Location}{}{Details}
+% Use \\cventry{dates}{degree}{school}{location}{}{details} for each entry below.
+
 \\end{document}
 
-Return ONLY a complete, compilable LaTeX document. Do not include markdown blocks.
+Return ONLY the complete, compilable LaTeX document.
 
-CANDIDATE OVERVIEW:
-${candidateOverview}
+CANDIDATE DATA:
+Skills: ${candidateData.skills}
+
+EXPERIENCE ENTRIES:
+${candidateData.experience.map(job => `
+- Dates: ${job.dates}
+  Title: ${job.title}
+  Company: ${job.company}
+  Location: ${job.location}
+  Description: ${job.description}
+`).join('\n')}
+
+EDUCATION ENTRIES:
+${candidateData.education.map(edu => `
+- Dates: ${edu.dates}
+  Degree: ${edu.degree}
+  School: ${edu.school}
+  Location: ${edu.location}
+  Details: ${edu.details}
+`).join('\n')}
 
 JOB DESCRIPTION:
 ${jobDescription}
@@ -143,30 +185,20 @@ ${alterations ? `USER REQUESTED ALTERATIONS: ${alterations}` : ''}
             await compileLatex(latexCode);
         } catch (initialError) {
             console.warn('Initial LaTeX compilation failed, attempting self-fix...', initialError.message);
-            
             const fixPrompt = `
-The following LaTeX code failed to compile with the error: "${initialError.message}".
-Please fix the syntax errors in the LaTeX code and return ONLY the corrected, complete LaTeX document.
-Ensure all special characters like &, %, $, #, _, {, }, ~, ^, \\ are properly escaped if they are intended to be literal text.
-Common moderncv issues:
-- Unclosed braces {}
-- Special characters in URLs or addresses
-- Incorrect number of arguments for \\cventry or \\cvitem
+The following LaTeX code failed to compile with error: "${initialError.message}". 
+Fix the syntax and return ONLY the corrected LaTeX document. 
+Ensure special characters like & are escaped (\\&).
 
 ORIGINAL CODE:
 ${latexCode}
 `;
-            
             const fixResponse = await axios.post('http://localhost:11434/api/generate', {
                 model: 'deepseek-coder-v2',
                 prompt: fixPrompt,
                 stream: false
             });
-
-            latexCode = fixResponse.data.response;
-            latexCode = latexCode.replace(/```latex/g, '').replace(/```/g, '').trim();
-            
-            // Try compiling one more time with the fixed code
+            latexCode = fixResponse.data.response.replace(/```latex/g, '').replace(/```/g, '').trim();
             await compileLatex(latexCode);
         }
 
